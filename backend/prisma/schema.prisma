@@ -1,0 +1,160 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model ShopConnection {
+  id            String         @id @default(uuid()) @db.Uuid
+  shopDomain    String         @unique
+  lastSyncedAt  DateTime?      @db.Timestamptz(6)
+  createdAt     DateTime       @default(now()) @db.Timestamptz(6)
+  updatedAt     DateTime       @updatedAt @db.Timestamptz(6)
+  customers     Customer[]
+  orders        Order[]
+  webhookEvents WebhookEvent[]
+  orderCreationRequests OrderCreationRequest[]
+
+  @@map("shop_connections")
+}
+
+model Customer {
+  id                String         @id @default(uuid()) @db.Uuid
+  shopId            String         @db.Uuid
+  shopifyCustomerId String?
+  firstName         String?
+  lastName          String?
+  displayName       String
+  email             String?
+  createdAt         DateTime       @default(now()) @db.Timestamptz(6)
+  updatedAt         DateTime       @updatedAt @db.Timestamptz(6)
+  shop              ShopConnection @relation(fields: [shopId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  orders            Order[]
+
+  @@unique([shopId, shopifyCustomerId])
+  @@index([shopId, email])
+  @@index([shopId, displayName])
+  @@map("customers")
+}
+
+model Order {
+  id                String         @id @default(uuid()) @db.Uuid
+  shopId            String         @db.Uuid
+  shopifyOrderId    String
+  orderNumber       String
+  customerId        String?        @db.Uuid
+  customerName      String?
+  customerEmail     String?
+  financialStatus   String?
+  fulfillmentStatus String
+  totalAmount       Decimal        @db.Decimal(20, 4)
+  currencyCode      String         @db.VarChar(3)
+  orderDate         DateTime       @db.Timestamptz(6)
+  cancelledAt       DateTime?      @db.Timestamptz(6)
+  shopifyUpdatedAt  DateTime       @db.Timestamptz(6)
+  syncedAt          DateTime       @default(now()) @db.Timestamptz(6)
+  createdAt         DateTime       @default(now()) @db.Timestamptz(6)
+  updatedAt         DateTime       @updatedAt @db.Timestamptz(6)
+  shop              ShopConnection @relation(fields: [shopId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  customer          Customer?      @relation(fields: [customerId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  items             OrderItem[]
+  creationRequest   OrderCreationRequest?
+
+  @@unique([shopId, shopifyOrderId])
+  @@index([shopId, orderDate(sort: Desc)])
+  @@index([shopId, financialStatus, orderDate(sort: Desc)])
+  @@index([shopId, fulfillmentStatus, orderDate(sort: Desc)])
+  @@index([customerId])
+  @@index([shopId, orderNumber])
+  @@index([shopId, customerName])
+  @@index([shopId, customerEmail])
+  @@map("orders")
+}
+
+model OrderItem {
+  id                String  @id @default(uuid()) @db.Uuid
+  orderId           String  @db.Uuid
+  shopifyLineItemId String
+  shopifyProductId  String?
+  shopifyVariantId  String?
+  title             String
+  variantTitle      String?
+  sku               String?
+  quantity          Int
+  unitPrice         Decimal @db.Decimal(20, 4)
+  totalPrice        Decimal @db.Decimal(20, 4)
+  order             Order   @relation(fields: [orderId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+
+  @@unique([orderId, shopifyLineItemId])
+  @@index([orderId])
+  @@index([shopifyProductId])
+  @@index([shopifyVariantId])
+  @@map("order_items")
+}
+
+model WebhookEvent {
+  id           String         @id @default(uuid()) @db.Uuid
+  shopId       String         @db.Uuid
+  deliveryId   String
+  eventId      String?
+  topic        String
+  status       String
+  resourceId   String?
+  attemptCount Int            @default(0)
+  receivedAt   DateTime       @default(now()) @db.Timestamptz(6)
+  nextAttemptAt DateTime?     @db.Timestamptz(6)
+  lockedAt     DateTime?      @db.Timestamptz(6)
+  processedAt  DateTime?      @db.Timestamptz(6)
+  errorMessage String?
+  shop         ShopConnection @relation(fields: [shopId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+
+  @@unique([shopId, deliveryId])
+  @@index([shopId, status, receivedAt(sort: Desc)])
+  @@index([shopId, topic, receivedAt(sort: Desc)])
+  @@index([status, nextAttemptAt, receivedAt])
+  @@map("webhook_events")
+}
+
+model OrderCreationRequest {
+  id             String         @id @default(uuid()) @db.Uuid
+  shopId         String         @db.Uuid
+  idempotencyKey String
+  requestHash    String
+  status         String
+  shopifyOrderId String?
+  orderId        String?        @unique @db.Uuid
+  errorCode      String?
+  createdAt      DateTime       @default(now()) @db.Timestamptz(6)
+  updatedAt      DateTime       @updatedAt @db.Timestamptz(6)
+  shop           ShopConnection @relation(fields: [shopId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  order          Order?         @relation(fields: [orderId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+
+  @@unique([shopId, idempotencyKey])
+  @@index([shopId, status, createdAt(sort: Desc)])
+  @@map("order_creation_requests")
+}
+
+model OperatorSession {
+  id        String   @id @default(uuid()) @db.Uuid
+  tokenHash String   @unique @map("token_hash") @db.Char(64)
+  username  String   @db.VarChar(100)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  expiresAt DateTime @map("expires_at") @db.Timestamptz(6)
+
+  @@index([expiresAt])
+  @@map("operator_sessions")
+}
+
+model OperatorLoginAttempt {
+  keyHash         String    @id @map("key_hash") @db.Char(64)
+  windowStartedAt DateTime  @map("window_started_at") @db.Timestamptz(6)
+  failures        Int       @default(0)
+  blockedUntil    DateTime? @map("blocked_until") @db.Timestamptz(6)
+  updatedAt       DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@index([updatedAt])
+  @@map("operator_login_attempts")
+}

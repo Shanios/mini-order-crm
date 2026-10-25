@@ -1,0 +1,1 @@
+-- Phase 1 starts with an empty application schema; Prisma records this baseline migration.
