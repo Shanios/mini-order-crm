@@ -9,27 +9,30 @@ Implemented functionality includes order import and incremental synchronization,
 - Node.js 22.12 or newer on the 22.x line (or a compatible current LTS release)
 - npm 10 or newer
 - PostgreSQL installed and running locally, or Docker Compose for a local PostgreSQL service
-- A Shopify development store and a Shopify app in the same organization for the client-credentials flow
-- Shopify app permissions described in [Shopify integration](#shopify-integration)
+- A Shopify development store and app in the same organization for the client-credentials flow (optional for local work that does not use Shopify)
+- Shopify app permissions described in [Shopify integration](#shopify-integration) for the features you use
 
 ## First-time setup
 
-Create the active `.env` in the project **root** by copying `.env.example`. Do not create the active `.env` inside `backend/`; NestJS runtime, Prisma scripts, and webhook registration explicitly load the root file.
+Install dependencies and run the setup wizard from the repository root. The active `.env` belongs in the repository root, not inside `backend/`.
 
 Windows Command Prompt example (change the path to match your clone location):
 
 ```cmd
-cd /d D:\mini-order-crm
-copy .env.example .env
+npm ci --prefix backend
+npm ci --prefix frontend
+npm run setup
 ```
 
 PowerShell alternative:
 
 ```powershell
-Copy-Item .env.example .env
+npm ci --prefix backend
+npm ci --prefix frontend
+npm run setup
 ```
 
-Edit the root `.env` and replace every `replace_with_...` or `your-shop...` placeholder. Set `DATABASE_URL` to your PostgreSQL connection details. `POSTGRES_DB`, `POSTGRES_USER`, and `POSTGRES_PASSWORD` are used only if you start the optional Compose database. Never commit `.env` or paste its values into source code or issue reports.
+The wizard creates `.env` from `.env.example` only when it is missing. It keeps existing values, asks before changing configured operator credentials or rotating a session secret, and stores only the generated password hash. Passwords and database URLs are entered without terminal echo. It checks PostgreSQL, generates Prisma Client, offers to deploy existing migrations, and checks a configured Shopify app with a read-only shop query. It never installs PostgreSQL, creates database accounts, resets databases, or creates Shopify orders. Rerunning setup is safe and does not rotate valid credentials unless you choose to. Never commit `.env` or share its contents.
 
 You can use a local PostgreSQL installation or start the optional Docker Compose database from the repository root:
 
@@ -37,29 +40,22 @@ You can use a local PostgreSQL installation or start the optional Docker Compose
 docker compose up -d postgres
 ```
 
-For Shopify functionality, configure the store domain, app client ID and secret, and API version `2026-10`. The app uses Shopify's client-credentials flow, intended for an app and store in the same Shopify organization. Grant `read_orders` and `read_customers` for order and customer details, and complete any required protected customer data review. Access to older history also requires Shopify's approval for `read_all_orders`; without it, initial import covers the latest 60 days.
+For Shopify functionality, configure the store domain, app client ID and secret, and API version `2026-10`. The app uses Shopify's client-credentials flow, intended for an app and store in the same Shopify organization. Grant `read_orders` and `read_customers` for order and customer details, and complete any required protected customer data review. Access to older history also requires Shopify's approval for `read_all_orders`; without it, initial import covers the latest 60 days. `SHOPIFY_SYNC_SECRET` is required for manual sync; `SHOPIFY_ORDER_CREATE_SECRET` is optional for trusted backend-only order creation.
 
-Set `SHOPIFY_SYNC_SECRET` to a unique random value of at least 32 characters to authorize manual sync. Configure the single operator account as described under [Operator login](#operator-login). `SHOPIFY_ORDER_CREATE_SECRET` is optional for trusted backend-only bearer access; browser requests use the operator session instead.
+The setup wizard configures the single operator account and the manual sync secret. `SHOPIFY_ORDER_CREATE_SECRET` is optional for trusted backend-only bearer access; browser requests use the operator session instead.
 
-Install frontend dependencies from the lockfile and start the Vite server (Terminal 1):
-
-```powershell
-Set-Location frontend
-npm ci
-npm run dev
-```
-
-Install backend dependencies, generate Prisma Client, validate and deploy the checked-in migrations, check database connectivity, and start NestJS (Terminal 2):
+After setup, start the backend (Terminal 1):
 
 ```powershell
 Set-Location backend
-npm ci
-npm run prisma:generate
-npm run prisma:validate
-npm run prisma:deploy
-npm run prisma:check
-npm run prisma:status
 npm run start:dev
+```
+
+Start the frontend (Terminal 2):
+
+```powershell
+Set-Location frontend
+npm run dev
 ```
 
 Open the frontend at <http://localhost:5173>. The API health endpoint is <http://localhost:3000/api/health>. The Vite development server proxies `/api` requests to `http://localhost:3000`; if you change `API_PORT`, update the Vite proxy target as well.
@@ -186,19 +182,11 @@ Orders and items are upserted transactionally; the importer skips an older Shopi
 
 ### Operator login
 
-The backend supports one operator configured by `CRM_OPERATOR_USERNAME` and `CRM_OPERATOR_PASSWORD_HASH`. Generate a fresh password hash in a local interactive terminal; input is not echoed:
+The backend supports one operator configured by `CRM_OPERATOR_USERNAME` and `CRM_OPERATOR_PASSWORD_HASH`. Run `npm run setup` from the repository root to choose or change the username and password. Password input is hidden and only the compatible scrypt hash is stored. Existing credentials can be kept without knowing the current password. A password change takes effect on the next login. Rerun setup and explicitly choose session-secret rotation to invalidate existing sessions; the wizard creates a separate 32-byte random secret when none is valid. Optionally set `CRM_SESSION_TTL_MINUTES` from 5 to 1440; the default is 480 minutes.
 
-```powershell
-node backend/scripts/hash-operator-password.cjs
-```
+To update Shopify settings later, rerun `npm run setup` and choose to change the relevant values, or edit the ignored root `.env` directly. Required integration settings are `SHOPIFY_SHOP_DOMAIN`, `SHOPIFY_CLIENT_ID`, `SHOPIFY_CLIENT_SECRET`, `SHOPIFY_API_VERSION`, and a unique 32+ character `SHOPIFY_SYNC_SECRET`. `SHOPIFY_ORDER_CREATE_SECRET` is optional and only for trusted backend tools. Local development URLs are `http://localhost:5173` for Vite and `http://localhost:3000` for NestJS; they are not Shopify credentials.
 
-Put the resulting `CRM_OPERATOR_PASSWORD_HASH=...` line in the root `.env`. Set `CRM_SESSION_SECRET` to an independent cryptographically random value with at least 32 characters. Optionally set `CRM_SESSION_TTL_MINUTES` from 5 to 1440; the default is 480 minutes. Apply the `20261025100000_operator_sessions` migration and regenerate Prisma Client before starting the updated backend.
-
-Generate a session secret independently from the Shopify secrets in a local terminal, then copy the output directly into the root `.env` without committing or sharing it:
-
-```powershell
-node -e "console.log(require('node:crypto').randomBytes(32).toString('base64url'))"
-```
+For database troubleshooting, confirm PostgreSQL is running and the root `.env` `DATABASE_URL` points to a reachable database. Setup uses a safe `SELECT 1` check before offering `prisma migrate deploy`; it never resets a database. If Prisma reports `EPERM` on Windows, stop backend Node processes and rerun setup so Prisma can generate its engine files. Do not delete files locked by a running process. If Shopify is unavailable, local setup can still finish and the report will say Shopify needs attention.
 
 | Endpoint | Request | Success |
 | --- | --- | --- |
